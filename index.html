@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>GhostPair - 2-Person Private P2P Chat</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- PeerJS for WebRTC P2P direct transport -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Dexie.js for 100% Device-Only IndexedDB Storage -->
+  <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+              900: '#064e3b',
+            },
+            dark: {
+              950: '#090a0f',
+              900: '#0f111a',
+              850: '#151824',
+              800: '#1c2030',
+              700: '#282e44',
+            }
+          },
+          animation: {
+            'pulse-glow': 'pulseGlow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'float': 'float 3s ease-in-out infinite',
+          },
+          keyframes: {
+            pulseGlow: {
+              '0%, 100%': { opacity: 1, boxShadow: '0 0 15px rgba(16, 185, 129, 0.5)' },
+              '50%': { opacity: 0.6, boxShadow: '0 0 5px rgba(16, 185, 129, 0.2)' },
+            },
+            float: {
+              '0%, 100%': { transform: 'translateY(0)' },
+              '50%': { transform: 'translateY(-6px)' },
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #282e44; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3b4363; }
+
+    /* Frosted glass */
+    .glass-panel {
+      background: rgba(21, 24, 36, 0.75);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-input {
+      background: rgba(15, 17, 26, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .glass-input:focus {
+      border-color: #10b981;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+    }
+  </style>
+</head>
+<body class="bg-dark-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased select-none overflow-hidden">
+
+  <!-- ==================== TOP NAVIGATION ==================== -->
+  <header id="chatHeader" class="glass-panel h-16 px-4 flex items-center justify-between z-30 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="relative">
+        <div id="statusAvatar" class="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center font-bold text-lg text-white shadow-lg">
+          G
+        </div>
+        <span id="connectionBadge" class="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-rose-500 border-2 border-dark-950 transition-colors"></span>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 id="peerDisplayName" class="font-semibold text-sm tracking-wide text-slate-100">Ghost Partner</h1>
+          <span id="p2pPill" class="text-[10px] px-2 py-0.5 rounded-full font-mono bg-dark-800 text-slate-400 border border-white/5">
+            Offline
+          </span>
+        </div>
+        <p id="subStatus" class="text-xs text-slate-400 flex items-center gap-1">
+          <span>End-to-End P2P</span>
+          <span class="inline-block w-1 h-1 rounded-full bg-slate-500"></span>
+          <span>Zero Server Storage</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex items-center gap-1 sm:gap-2">
+      <!-- Audio Call Button -->
+      <button id="btnAudioCall" title="Voice Call" disabled class="p-2.5 rounded-xl bg-dark-800/80 hover:bg-dark-700 text-slate-400 hover:text-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition">
+        <i data-lucide="phone" class="w-4 h-4"></i>
+      </button>
+
+      <!-- Video Call Button -->
+      <button id="btnVideoCall" title="Video Call" disabled class="p-2.5 rounded-xl bg-dark-800/80 hover:bg-dark-700 text-slate-400 hover:text-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition">
+        <i data-lucide="video" class="w-4 h-4"></i>
+      </button>
+
+      <!-- Connection / Room Info Button -->
+      <button id="btnRoomInfo" title="Pairing Details" class="p-2.5 rounded-xl bg-dark-800/80 hover:bg-dark-700 text-slate-300 hover:text-white transition">
+        <i data-lucide="key" class="w-4 h-4"></i>
+      </button>
+
+      <!-- Settings / Options -->
+      <button id="btnSettings" title="Local Storage & Settings" class="p-2.5 rounded-xl bg-dark-800/80 hover:bg-dark-700 text-slate-300 hover:text-white transition">
+        <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- ==================== MAIN CHAT CONTAINER ==================== -->
+  <main class="flex-1 flex flex-col relative overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-dark-900 via-dark-950 to-black">
+
+    <!-- Pairing / Connection Banner (shown when disconnected) -->
+    <div id="unpairedBanner" class="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between text-xs text-amber-300">
+      <div class="flex items-center gap-2">
+        <i data-lucide="shield-alert" class="w-4 h-4 text-amber-400"></i>
+        <span>Waiting for partner with matching secret code to join...</span>
+      </div>
+      <button id="btnOpenPairModal" class="underline hover:text-amber-100 font-medium ml-2">Change Code</button>
+    </div>
+
+    <!-- Message Stream -->
+    <div id="messageStream" class="flex-1 overflow-y-auto p-4 space-y-3">
+      <!-- Welcome Encrypted Badge -->
+      <div class="flex flex-col items-center justify-center my-6 space-y-2 text-center opacity-80">
+        <div class="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-inner">
+          <i data-lucide="lock" class="w-6 h-6"></i>
+        </div>
+        <p class="text-xs font-medium text-slate-300">True 2-Person Peer-to-Peer Encryption</p>
+        <p class="text-[11px] text-slate-500 max-w-xs">
+          Messages, audio recordings, and photos travel directly between devices and exist solely in your local browser storage.
+        </p>
+      </div>
+
+      <!-- Messages rendered dynamically here -->
+    </div>
+
+    <!-- Peer Typing Indicator -->
+    <div id="typingIndicator" class="hidden px-5 py-1 text-xs text-slate-400 italic flex items-center gap-2 animate-pulse">
+      <div class="flex gap-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce"></span>
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.2s]"></span>
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.4s]"></span>
+      </div>
+      <span id="typingText">Partner is typing...</span>
+    </div>
+
+    <!-- Audio Recording Live Bar -->
+    <div id="recordingBar" class="hidden glass-panel mx-4 mb-2 p-3 rounded-2xl border border-rose-500/30 flex items-center justify-between text-rose-400">
+      <div class="flex items-center gap-3">
+        <span class="w-3 h-3 rounded-full bg-rose-500 animate-ping"></span>
+        <span class="text-xs font-mono font-semibold tracking-wider text-rose-300" id="recordTimer">00:00</span>
+        <span class="text-xs text-slate-400">Recording voice note...</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btnCancelRecord" class="px-3 py-1 text-xs text-slate-400 hover:text-white rounded-lg bg-dark-800 transition">
+          Discard
+        </button>
+        <button id="btnSendRecord" class="px-3 py-1 text-xs text-white rounded-lg bg-emerald-600 hover:bg-emerald-500 flex items-center gap-1 transition">
+          <i data-lucide="send" class="w-3 h-3"></i> Send
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== INPUT TOOLBAR ==================== -->
+    <footer class="glass-panel p-3 border-t border-white/5 shrink-0">
+      <form id="chatForm" class="flex items-center gap-2">
+
+        <!-- Media / File Picker (photos, videos, audio, any file) -->
+        <label for="fileInput" title="Send Photo / Video / Audio / File" class="p-2.5 rounded-xl bg-dark-800/80 hover:bg-dark-700 text-slate-400 hover:text-emerald-400 cursor-pointer transition">
+          <i data-lucide="paperclip" class="w-5 h-5"></i>
+          <input type="file" id="fileInput" multiple class="hidden" />
+        </label>
+
+        <!-- Text Input -->
+        <div class="flex-1 relative">
+          <input
+            type="text"
+            id="textInput"
+            placeholder="Type encrypted message..."
+            autocomplete="off"
+            class="w-full glass-input px-4 py-2.5 rounded-xl text-sm text-slate-100 placeholder-slate-500 outline-none transition"
+          />
+        </div>
+
+        <!-- Voice Note Button (Hold / Click to Record) -->
+        <button
+          type="button"
+          id="btnToggleRecord"
+          title="Voice Note"
+          class="p-2.5 rounded-xl bg-dark-800/80 hover:bg-dark-700 text-slate-400 hover:text-rose-400 transition"
+        >
+          <i data-lucide="mic" class="w-5 h-5"></i>
+        </button>
+
+        <!-- Send Message Button -->
+        <button
+          type="submit"
+          id="btnSendMessage"
+          title="Send"
+          class="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-lg shadow-emerald-950 transition"
+        >
+          <i data-lucide="send" class="w-5 h-5"></i>
+        </button>
+      </form>
+    </footer>
+  </main>
+
+  <!-- ==================== PAIRING & CODE MODAL ==================== -->
+  <div id="pairModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="glass-panel max-w-md w-full p-6 rounded-3xl border border-white/10 shadow-2xl relative overflow-hidden">
+      <!-- Glow decoration -->
+      <div class="absolute -top-12 -right-12 w-32 h-32 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="text-center space-y-2 mb-6">
+        <div class="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-white shadow-xl shadow-emerald-900/40">
+          <i data-lucide="key-round" class="w-7 h-7"></i>
+        </div>
+        <h2 class="text-xl font-bold text-white tracking-tight">2-Person Secret Room</h2>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Both users must enter the <strong class="text-emerald-400">exact same secret code</strong>. Once both are present, a direct encrypted WebRTC channel links your devices.
+        </p>
+      </div>
+
+      <form id="pairForm" class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1.5">Secret Code / Passphrase</label>
+          <div class="relative">
+            <input
+              type="text"
+              id="secretCodeInput"
+              required
+              placeholder="e.g. moonlight-secret-77"
+              class="w-full glass-input px-4 py-3 rounded-xl text-sm font-mono text-emerald-400 placeholder-slate-600 outline-none"
+            />
+            <button type="button" id="btnGenRandomCode" class="absolute right-2 top-2 px-2 py-1 text-[11px] rounded bg-dark-800 text-slate-400 hover:text-white">
+              Random
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1">Share this code with your partner via your preferred secure channel.</p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1.5">Your Nickname</label>
+          <input
+            type="text"
+            id="nickInput"
+            placeholder="e.g. Alex"
+            value="User"
+            class="w-full glass-input px-4 py-2.5 rounded-xl text-sm text-slate-200 outline-none"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-sm shadow-lg shadow-emerald-900/30 flex items-center justify-center gap-2 transition"
+        >
+          <i data-lucide="radio" class="w-4 h-4"></i> Establish Direct P2P Channel
+        </button>
+      </form>
+
+      <div class="mt-4 pt-4 border-t border-white/5 text-center">
+        <span class="text-[11px] text-slate-500 flex items-center justify-center gap-1">
+          <i data-lucide="hard-drive" class="w-3.5 h-3.5 text-emerald-500"></i>
+          100% Local Device Storage (IndexedDB)
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== CALL MODAL (AUDIO & VIDEO) ==================== -->
+  <div id="callModal" class="hidden fixed inset-0 z-50 bg-dark-950/95 backdrop-blur-xl flex flex-col justify-between p-6">
+    <!-- Call Top Status -->
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+        <span id="callStatusLabel" class="text-xs uppercase tracking-widest text-emerald-400 font-mono">P2P Encrypted Call</span>
+      </div>
+      <div id="callTimer" class="font-mono text-sm text-slate-300">00:00</div>
+    </div>
+
+    <!-- Center Stage: Avatar or Video Feed -->
+    <div class="flex-1 flex flex-col items-center justify-center relative my-4 overflow-hidden rounded-3xl bg-dark-900 border border-white/5">
+      <!-- Remote Video (Full Screen in Call Container) -->
+      <video id="remoteVideo" autoplay playsinline class="w-full h-full object-cover rounded-3xl hidden"></video>
+
+      <!-- Local Self Video (Picture in Picture) -->
+      <div id="localVideoContainer" class="absolute top-4 right-4 w-28 sm:w-36 aspect-video rounded-2xl overflow-hidden border border-white/20 shadow-2xl bg-black hidden z-10">
+        <video id="localVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+      </div>
+
+      <!-- Audio Call Center Avatar (shown when video is disabled) -->
+      <div id="audioCallCenter" class="flex flex-col items-center space-y-4">
+        <div class="w-28 h-28 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-4xl font-bold text-white shadow-2xl animate-pulse">
+          <i data-lucide="phone-call" class="w-12 h-12"></i>
+        </div>
+        <div class="text-center">
+          <h3 id="callPeerName" class="text-xl font-bold text-white">Ghost Partner</h3>
+          <p id="callSubState" class="text-xs text-slate-400 mt-1">Calling peer directly...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Call Control Bar -->
+    <div class="flex items-center justify-center gap-4 py-2">
+      <!-- Toggle Microphone -->
+      <button id="btnToggleMute" class="p-4 rounded-full bg-dark-800 hover:bg-dark-700 text-slate-200 transition">
+        <i data-lucide="mic" class="w-6 h-6"></i>
+      </button>
+
+      <!-- Toggle Camera -->
+      <button id="btnToggleCam" class="p-4 rounded-full bg-dark-800 hover:bg-dark-700 text-slate-200 transition">
+        <i data-lucide="video" class="w-6 h-6"></i>
+      </button>
+
+      <!-- End Call Button -->
+      <button id="btnEndCall" class="p-4 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-xl shadow-rose-900/50 transition">
+        <i data-lucide="phone-off" class="w-6 h-6"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== INCOMING CALL PROMPT ==================== -->
+  <div id="incomingCallPrompt" class="hidden fixed top-4 right-4 left-4 sm:left-auto sm:w-96 z-50 glass-panel p-4 rounded-2xl border border-emerald-500/30 shadow-2xl flex items-center justify-between animate-bounce">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+        <i data-lucide="phone-incoming" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <p id="incomingCallTitle" class="text-xs font-semibold text-white">Incoming Call</p>
+        <p id="incomingCallType" class="text-[11px] text-slate-400">Direct P2P Call</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="btnDeclineCall" class="p-2.5 rounded-xl bg-rose-600/80 hover:bg-rose-600 text-white transition">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+      <button id="btnAcceptCall" class="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-950">
+        <i data-lucide="phone" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== SETTINGS / LOCAL STORAGE MODAL ==================== -->
+  <div id="settingsModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="glass-panel max-w-md w-full p-6 rounded-3xl border border-white/10 shadow-2xl space-y-5">
+      <div class="flex items-center justify-between pb-3 border-b border-white/5">
+        <div class="flex items-center gap-2 text-emerald-400">
+          <i data-lucide="shield-check" class="w-5 h-5"></i>
+          <h3 class="font-bold text-sm text-white">Security & Device Storage</h3>
+        </div>
+        <button id="btnCloseSettings" class="p-1 rounded-lg hover:bg-dark-800 text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs text-slate-300">
+        <div class="p-3 rounded-xl bg-dark-900 border border-white/5 space-y-1">
+          <span class="text-[11px] uppercase tracking-wider text-slate-500 font-mono">Current Pairing Hash</span>
+          <p id="settingsRoomHash" class="font-mono text-emerald-400 break-all text-[11px]">Not connected</p>
+        </div>
+
+        <div class="p-3 rounded-xl bg-dark-900 border border-white/5 flex items-center justify-between">
+          <span>Total Saved Messages</span>
+          <span id="savedMsgCount" class="font-mono font-semibold text-white">0</span>
+        </div>
+
+        <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300">
+          <i data-lucide="info" class="w-4 h-4 inline mr-1 text-emerald-400"></i>
+          No cloud server stores your data. All media and conversations reside entirely inside your browser's IndexedDB.
+        </div>
+      </div>
+
+      <!-- Destructive actions -->
+      <div class="pt-2 border-t border-white/5 flex flex-col gap-2">
+        <button id="btnExportChat" class="w-full py-2.5 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-200 text-xs font-medium flex items-center justify-center gap-2 transition">
+          <i data-lucide="download" class="w-4 h-4"></i> Export Local Chat History (JSON)
+        </button>
+        <button id="btnWipeDevice" class="w-full py-2.5 rounded-xl bg-rose-950/60 hover:bg-rose-900 border border-rose-500/30 text-rose-300 text-xs font-medium flex items-center justify-center gap-2 transition">
+          <i data-lucide="trash-2" class="w-4 h-4"></i> Wipe All Data from This Device
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Viewer Modal (Lightbox) -->
+  <div id="imageLightbox" class="hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer">
+    <img id="lightboxImg" src="" class="max-w-full max-h-[90vh] rounded-2xl object-contain shadow-2xl" />
+  </div>
+
+  <!-- ==================== APPLICATION JAVASCRIPT ==================== -->
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    /* =====================================================================
+       1. LOCAL DATABASE LAYER (IndexedDB via Dexie)
+       Zero cloud: All messages, photos (blobs), and audio notes are stored locally
+       ===================================================================== */
+    const db = new Dexie('GhostPairLocalDB');
+    db.version(1).stores({
+      messages: '++id, timestamp, sender, type, status',
+      config: 'key, value'
+    });
+
+    /* =====================================================================
+       2. AUDIO UTILITIES (Synthesizer & Sound Effects via Web Audio API)
+       ===================================================================== */
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(freq = 600, duration = 0.1, type = 'sine') {
+      try {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) { console.warn('Audio feedback failed:', e); }
+    }
+
+    function playRingtone() {
+      playBeep(440, 0.2);
+      setTimeout(() => playBeep(554, 0.3), 150);
+    }
+
+    /* =====================================================================
+       3. APPLICATION STATE
+       ===================================================================== */
+    const state = {
+      secretCode: localStorage.getItem('ghostpair_code') || '',
+      nickname: localStorage.getItem('ghostpair_nick') || 'User',
+      peerNickname: 'Ghost Partner',
+      roomHash: '',
+      peerRole: null, // 'host' or 'joiner'
+      peer: null,
+      conn: null,
+      activeCall: null,
+      localStream: null,
+      remoteStream: null,
+      isMuted: false,
+      isCamOff: false,
+      callSeconds: 0,
+      callTimerInterval: null,
+      mediaRecorder: null,
+      audioChunks: [],
+      recordTimerInterval: null,
+      recordSeconds: 0,
+      pendingCall: null
+    };
+
+    // Helper: SHA-256 Room Hash
+    async function sha256(str) {
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 20);
+    }
+
+    /* =====================================================================
+       4. P2P ENGINE (WebRTC via PeerJS)
+       Deterministic ID derivation:
+       Room Hash -> Peer 1: gp_<hash>_alpha | Peer 2: gp_<hash>_beta
+       ===================================================================== */
+    async function initP2P(secretCode, nickname) {
+      if (!secretCode) return;
+      state.secretCode = secretCode;
+      state.nickname = nickname;
+      localStorage.setItem('ghostpair_code', secretCode);
+      localStorage.setItem('ghostpair_nick', nickname);
+
+      state.roomHash = await sha256(secretCode);
+      document.getElementById('settingsRoomHash').innerText = state.roomHash;
+
+      // Close previous connection if exists
+      if (state.peer) state.peer.destroy();
+
+      const idAlpha = `gp_${state.roomHash}_a`;
+      const idBeta  = `gp_${state.roomHash}_b`;
+
+      updateStatus(false, 'Connecting to P2P network...');
+
+      // Attempt to register as Alpha (Host) first
+      state.peer = new Peer(idAlpha, {
+        debug: 1,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      });
+
+      state.peer.on('open', (id) => {
+        state.peerRole = 'alpha';
+        console.log('Registered as Alpha peer:', id);
+        updateStatus(false, 'Waiting for partner...');
+      });
+
+      state.peer.on('error', (err) => {
+        // If ID taken, Alpha is already online! So we are Beta (the joiner).
+        if (err.type === 'unavailable-id') {
+          console.log('Alpha taken. Becoming Beta peer...');
+          state.peer = new Peer(idBeta, {
+            debug: 1,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+              ]
+            }
+          });
+
+          state.peer.on('open', (id) => {
+            state.peerRole = 'beta';
+            console.log('Registered as Beta peer. Connecting to Alpha...');
+            updateStatus(false, 'Linking with partner...');
+            connectToPeer(idAlpha);
+          });
+
+          setupPeerHandlers();
+        } else {
+          console.error('Peer error:', err);
+          updateStatus(false, 'Connection error');
+        }
+      });
+
+      setupPeerHandlers();
+    }
+
+    function setupPeerHandlers() {
+      if (!state.peer) return;
+
+      // Incoming Data Connection
+      state.peer.on('connection', (c) => {
+        setupDataConnection(c);
+      });
+
+      // Incoming Media Stream Call (Voice/Video)
+      state.peer.on('call', (incomingCall) => {
+        state.pendingCall = incomingCall;
+        const callType = incomingCall.metadata?.type || 'audio';
+        showIncomingCallPrompt(callType);
+      });
+    }
+
+    function connectToPeer(remoteId) {
+      const c = state.peer.connect(remoteId, {
+        reliable: true,
+        metadata: { nickname: state.nickname }
+      });
+      setupDataConnection(c);
+    }
+
+    function setupDataConnection(c) {
+      state.conn = c;
+
+      c.on('open', () => {
+        console.log('P2P Data Channel Established!');
+        updateStatus(true, 'Direct P2P Link Active');
+        playBeep(880, 0.15);
+
+        // Send handshake info
+        c.send({
+          type: 'handshake',
+          nickname: state.nickname
+        });
+      });
+
+      c.on('data', async (data) => {
+        handleIncomingData(data);
+      });
+
+      c.on('close', () => {
+        console.log('P2P connection closed');
+        updateStatus(false, 'Partner disconnected');
+        // If Beta and Alpha disconnected, try to re-link
+        if (state.peerRole === 'beta') {
+          setTimeout(() => connectToPeer(`gp_${state.roomHash}_a`), 3000);
+        }
+      });
+
+      c.on('error', (e) => console.error('Data channel error:', e));
+    }
+
+    // Packet Dispatcher
+    // Store incoming file parts temporarily
+    const incomingFiles = {};
+
+    async function handleIncomingData(packet) {
+      switch (packet.type) {
+        case 'handshake':
+          state.peerNickname = packet.nickname || 'Ghost Partner';
+          document.getElementById('peerDisplayName').innerText = state.peerNickname;
+          document.getElementById('callPeerName').innerText = state.peerNickname;
+          break;
+
+        case 'chat':
+          playBeep(700, 0.1);
+          await saveAndRenderMessage({
+            sender: 'peer',
+            type: packet.msgType, // 'text', 'image', 'audio'
+            content: packet.content,
+            timestamp: packet.timestamp || Date.now(),
+            status: 'read'
+          });
+          break;
+
+        case 'typing':
+          const ind = document.getElementById('typingIndicator');
+          if (packet.isTyping) {
+            document.getElementById('typingText').innerText = `${state.peerNickname} is typing...`;
+            ind.classList.remove('hidden');
+          } else {
+            ind.classList.add('hidden');
+          }
+          break;
+
+        case 'file-meta':
+          // Initialise storage for incoming file chunks
+          incomingFiles[packet.fileId] = {
+            meta: packet,
+            chunks: []
+          };
+          break;
+
+        case 'file-chunk':
+          const fileEntry = incomingFiles[packet.fileId];
+          if (fileEntry) {
+            fileEntry.chunks[packet.chunkIndex] = packet.data; // store by index
+          }
+          break;
+
+        case 'file-end':
+          const completed = incomingFiles[packet.fileId];
+          if (completed) {
+            const { meta, chunks } = completed;
+            // Concatenate chunks into a Blob
+            const blob = new Blob(chunks, { type: meta.mimeType });
+            const url = URL.createObjectURL(blob);
+            // Save to IndexedDB and render according to kind
+            const msg = {
+              sender: 'peer',
+              type: meta.fileKind,
+              content: url,
+              fileName: meta.fileName,
+              fileSize: meta.fileSize,
+              mimeType: meta.mimeType,
+              timestamp: meta.timestamp,
+              status: 'read'
+            };
+            await saveAndRenderMessage(msg);
+            // Clean up temporary storage
+            delete incomingFiles[packet.fileId];
+          }
+          break;
+
+        case 'call_declined':
+          alert(`${state.peerNickname} declined the call.`);
+          closeCall();
+          break;
+
+        case 'call_ended':
+          closeCall();
+          break;
+      }
+    }
+
+    /* =====================================================================
+       5. MESSAGING & DEVICE STORAGE (IndexedDB)
+       ===================================================================== */
+    async function saveAndRenderMessage(msg) {
+      // 1. Save to local IndexedDB (zero cloud)
+      const id = await db.messages.add(msg);
+      msg.id = id;
+
+      // 2. Render on UI
+      renderMessageItem(msg);
+      scrollChatToBottom();
+      updateMessageCount();
+    }
+
+    function renderMessageItem(msg) {
+      const container = document.getElementById('messageStream');
+      const isMe = msg.sender === 'me';
+      const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      const msgEl = document.createElement('div');
+      msgEl.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`;
+
+      let bubbleContent = '';
+
+      if (msg.type === 'text') {
+        bubbleContent = `
+          <div class="px-4 py-2.5 rounded-2xl text-sm leading-relaxed max-w-[85%] sm:max-w-md ${
+            isMe
+              ? 'bg-emerald-600 text-white rounded-br-none shadow-md shadow-emerald-950'
+              : 'glass-panel text-slate-100 rounded-bl-none'
+          }">
+            <p class="whitespace-pre-wrap break-words">${escapeHtml(msg.content)}</p>
+            <div class="flex items-center justify-end gap-1 mt-1 text-[10px] ${isMe ? 'text-emerald-200' : 'text-slate-400'}">
+              <span>${timeStr}</span>
+              ${isMe ? '<i data-lucide="check-check" class="w-3 h-3 text-emerald-300"></i>' : ''}
+            </div>
+          </div>
+        `;
+      } else if (msg.type === 'image') {
+        bubbleContent = `
+          <div class="rounded-2xl overflow-hidden max-w-[80%] sm:max-w-xs border border-white/10 ${
+            isMe ? 'rounded-br-none' : 'rounded-bl-none'
+          }">
+            <img src="${msg.content}" class="w-full h-auto object-cover cursor-pointer hover:opacity-95 transition" onclick="openLightbox('${msg.content}')" />
+            <div class="px-3 py-1 bg-dark-900/90 text-[10px] text-slate-400 flex justify-end">${timeStr}</div>
+          </div>
+        `;
+      } else if (msg.type === 'audio') {
+        bubbleContent = `
+          <div class="p-3 rounded-2xl flex items-center gap-3 min-w-[220px] max-w-[85%] ${
+            isMe ? 'bg-emerald-700/80 rounded-br-none' : 'glass-panel rounded-bl-none'
+          }">
+            <audio src="${msg.content}" controls class="h-8 w-48"></audio>
+            <span class="text-[10px] text-slate-300 whitespace-nowrap">${timeStr}</span>
+          </div>
+        `;
+      }
+
+      msgEl.innerHTML = bubbleContent;
+      container.appendChild(msgEl);
+      lucide.createIcons();
+    }
+
+    async function loadStoredMessages() {
+      const container = document.getElementById('messageStream');
+      const messages = await db.messages.orderBy('timestamp').toArray();
+      messages.forEach(msg => renderMessageItem(msg));
+      scrollChatToBottom();
+      updateMessageCount();
+    }
+
+    async function updateMessageCount() {
+      const count = await db.messages.count();
+      document.getElementById('savedMsgCount').innerText = count;
+    }
+
+    function scrollChatToBottom() {
+      const stream = document.getElementById('messageStream');
+      stream.scrollTop = stream.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      }[tag] || tag));
+    }
+
+    /* =====================================================================
+       6. SENDING TEXT, PHOTOS & VOICE NOTES
+       ===================================================================== */
+    document.getElementById('chatForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('textInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      const payload = {
+        type: 'chat',
+        msgType: 'text',
+        content: text,
+        timestamp: Date.now()
+      };
+
+      // Send via WebRTC DataChannel
+      if (state.conn && state.conn.open) {
+        state.conn.send(payload);
+      }
+
+      // Save locally
+      await saveAndRenderMessage({
+        sender: 'me',
+        type: 'text',
+        content: text,
+        timestamp: payload.timestamp,
+        status: state.conn?.open ? 'delivered' : 'stored-locally'
+      });
+
+      input.value = '';
+      sendTypingStatus(false);
+    });
+
+    // Typing trigger
+    let typingTimeout;
+    document.getElementById('textInput').addEventListener('input', () => {
+      sendTypingStatus(true);
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(() => sendTypingStatus(false), 2000);
+    });
+
+    function sendTypingStatus(isTyping) {
+      if (state.conn && state.conn.open) {
+        state.conn.send({ type: 'typing', isTyping });
+      }
+    }
+
+    // Universal File Attachments (Photo / Video / Audio / Document / Any file)
+    // Uses chunked ArrayBuffer transfer for reliability over WebRTC DataChannel.
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files || []);
+      files.forEach(file => sendFile(file));
+      e.target.value = ''; // Reset input
+    });
+
+    const MAX_CHUNK_SIZE = 16 * 1024; // 16KB chunks - reliable for P2P DataChannel
+
+    async function sendFile(file) {
+      if (!file) return;
+      const isConnected = state.conn && state.conn.open;
+
+      // Determine media category based on MIME type / extension
+      let fileKind = 'file'; // Generic
+      if (file.type.startsWith('image/')) fileKind = 'image';
+      else if (file.type.startsWith('video/')) fileKind = 'video';
+      else if (file.type.startsWith('audio/')) fileKind = 'audio';
+
+      const fileId = `file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const localUrl = URL.createObjectURL(file);
+      const fileSize = file.size;
+
+      // Save a "pending/uploading" local placeholder bubble
+      const pendingMsg = {
+        sender: 'me',
+        type: fileKind,
+        content: localUrl,
+        fileName: file.name,
+        fileSize: fileSize,
+        mimeType: file.type,
+        status: isConnected ? 'sending' : 'stored-locally',
+        timestamp: Date.now()
+      };
+      const pendingId = await db.messages.add(pendingMsg);
+      pendingMsg.id = pendingId;
+      renderMessageItem(pendingMsg);
+      scrollChatToBottom();
+      updateMessageCount();
+
+      if (!isConnected) {
+        console.warn('Not connected - file stored locally only.');
+        return;
+      }
+
+      // Send metadata packet first
+      state.conn.send({
+        type: 'file-meta',
+        fileId,
+        fileName: file.name,
+        fileSize,
+        mimeType: file.type,
+        fileKind,
+        timestamp: Date.now()
+      });
+
+      // Read file as ArrayBuffer and stream in chunks
+      const buffer = await file.arrayBuffer();
+      const chunkCount = Math.ceil(buffer.byteLength / MAX_CHUNK_SIZE);
+
+      for (let i = 0; i < chunkCount; i++) {
+        const start = i * MAX_CHUNK_SIZE;
+        const end = Math.min(start + MAX_CHUNK_SIZE, buffer.byteLength);
+        const chunk = buffer.slice(start, end);
+
+        // Wait for DataChannel buffer to have room (prevents overflow)
+        while (state.conn && state.conn.bufferedAmount > 8 * 1024 * 1024) {
+          await new Promise(resolve => {
+            state.conn.on('bufferedamountlow', resolve);
+          });
+        }
+
+        state.conn.send({
+          type: 'file-chunk',
+          fileId,
+          chunkIndex: i,
+          chunkCount,
+          data: chunk
+        });
+      }
+
+      // Signal completion
+      state.conn.send({ type: 'file-end', fileId });
+
+      // Update the local bubble status
+      await db.messages.update(pendingId, { status: 'delivered' });
+      playBeep(880, 0.12);
+    }
+
+    // Voice Note Push-To-Talk / Recording
+    const btnToggleRecord = document.getElementById('btnToggleRecord');
+    const recordingBar = document.getElementById('recordingBar');
+    const recordTimer = document.getElementById('recordTimer');
+
+    btnToggleRecord.addEventListener('click', async () => {
+      if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
+        stopRecording(false);
+      } else {
+        startRecording();
+      }
+    });
+
+    document.getElementById('btnCancelRecord').addEventListener('click', () => stopRecording(true));
+    document.getElementById('btnSendRecord').addEventListener('click', () => stopRecording(false));
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        state.audioChunks = [];
+        state.mediaRecorder = new MediaRecorder(stream);
+
+        state.mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) state.audioChunks.push(e.data);
+        };
+
+        state.mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          if (state.discardAudio) {
+            state.discardAudio = false;
+            return;
+          }
+
+          const audioBlob = new Blob(state.audioChunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64Audio = reader.result;
+            const payload = {
+              type: 'chat',
+              msgType: 'audio',
+              content: base64Audio,
+              timestamp: Date.now()
+            };
+
+            if (state.conn && state.conn.open) {
+              state.conn.send(payload);
+            }
+
+            await saveAndRenderMessage({
+              sender: 'me',
+              type: 'audio',
+              content: base64Audio,
+              timestamp: payload.timestamp,
+              status: 'delivered'
+            });
+          };
+          reader.readAsDataURL(audioBlob);
+        };
+
+        state.mediaRecorder.start();
+        recordingBar.classList.remove('hidden');
+        state.recordSeconds = 0;
+        state.recordTimerInterval = setInterval(() => {
+          state.recordSeconds++;
+          const mins = String(Math.floor(state.recordSeconds / 60)).padStart(2, '0');
+          const secs = String(state.recordSeconds % 60).padStart(2, '0');
+          recordTimer.innerText = `${mins}:${secs}`;
+        }, 1000);
+      } catch (err) {
+        alert('Microphone access is required for voice notes.');
+      }
+    }
+
+    function stopRecording(discard = false) {
+      if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
+        state.discardAudio = discard;
+        state.mediaRecorder.stop();
+      }
+      clearInterval(state.recordTimerInterval);
+      recordingBar.classList.add('hidden');
+    }
+
+    /* =====================================================================
+       7. REAL-TIME P2P AUDIO & VIDEO CALLING
+       ===================================================================== */
+    document.getElementById('btnAudioCall').addEventListener('click', () => initiateCall('audio'));
+    document.getElementById('btnVideoCall').addEventListener('click', () => initiateCall('video'));
+
+    async function initiateCall(type) {
+      if (!state.peer) return;
+      const targetId = state.peerRole === 'alpha' ? `gp_${state.roomHash}_b` : `gp_${state.roomHash}_a`;
+
+      try {
+        state.localStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: type === 'video'
+        });
+
+        setupLocalVideo(state.localStream, type === 'video');
+        openCallModal(type);
+        document.getElementById('callSubState').innerText = `Calling ${state.peerNickname}...`;
+
+        const call = state.peer.call(targetId, state.localStream, { metadata: { type } });
+        attachCallStream(call, type);
+      } catch (err) {
+        alert('Could not access microphone/camera: ' + err.message);
+      }
+    }
+
+    function showIncomingCallPrompt(type) {
+      playRingtone();
+      const ringInterval = setInterval(playRingtone, 2500);
+      const prompt = document.getElementById('incomingCallPrompt');
+      document.getElementById('incomingCallTitle').innerText = `${state.peerNickname} is calling...`;
+      document.getElementById('incomingCallType').innerText = type === 'video' ? 'Incoming Video Call' : 'Incoming Audio Call';
+      prompt.classList.remove('hidden');
+
+      document.getElementById('btnDeclineCall').onclick = () => {
+        clearInterval(ringInterval);
+        prompt.classList.add('hidden');
+        if (state.conn && state.conn.open) {
+          state.conn.send({ type: 'call_declined' });
+        }
+        state.pendingCall = null;
+      };
+
+      document.getElementById('btnAcceptCall').onclick = async () => {
+        clearInterval(ringInterval);
+        prompt.classList.add('hidden');
+        try {
+          state.localStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: type === 'video'
+          });
+
+          setupLocalVideo(state.localStream, type === 'video');
+          openCallModal(type);
+          state.pendingCall.answer(state.localStream);
+          attachCallStream(state.pendingCall, type);
+        } catch (err) {
+          alert('Microphone/Camera permission required to answer.');
+        }
+      };
+    }
+
+    function attachCallStream(call, type) {
+      state.activeCall = call;
+
+      call.on('stream', (remoteStream) => {
+        state.remoteStream = remoteStream;
+        document.getElementById('callSubState').innerText = 'Connected Direct P2P';
+
+        if (type === 'video') {
+          const remoteVideo = document.getElementById('remoteVideo');
+          remoteVideo.srcObject = remoteStream;
+          remoteVideo.classList.remove('hidden');
+          document.getElementById('audioCallCenter').classList.add('hidden');
+        }
+
+        // Play audio from remote stream
+        const audio = new Audio();
+        audio.srcObject = remoteStream;
+        audio.play().catch(e => console.log('Audio autoplay prompt needed:', e));
+
+        startCallDurationTimer();
+      });
+
+      call.on('close', () => closeCall());
+      call.on('error', (e) => {
+        console.error('Call stream error:', e);
+        closeCall();
+      });
+    }
+
+    function setupLocalVideo(stream, isVideo) {
+      const localVid = document.getElementById('localVideo');
+      const localContainer = document.getElementById('localVideoContainer');
+      if (isVideo) {
+        localVid.srcObject = stream;
+        localContainer.classList.remove('hidden');
+      } else {
+        localContainer.classList.add('hidden');
+      }
+    }
+
+    function openCallModal(type) {
+      document.getElementById('callModal').classList.remove('hidden');
+      document.getElementById('callStatusLabel').innerText = `P2P Encrypted ${type.toUpperCase()} Call`;
+      state.callSeconds = 0;
+      document.getElementById('callTimer').innerText = '00:00';
+    }
+
+    function startCallDurationTimer() {
+      clearInterval(state.callTimerInterval);
+      state.callTimerInterval = setInterval(() => {
+        state.callSeconds++;
+        const mins = String(Math.floor(state.callSeconds / 60)).padStart(2, '0');
+        const secs = String(state.callSeconds % 60).padStart(2, '0');
+        document.getElementById('callTimer').innerText = `${mins}:${secs}`;
+      }, 1000);
+    }
+
+    function closeCall() {
+      if (state.activeCall) {
+        state.activeCall.close();
+        state.activeCall = null;
+      }
+      if (state.localStream) {
+        state.localStream.getTracks().forEach(t => t.stop());
+        state.localStream = null;
+      }
+      clearInterval(state.callTimerInterval);
+      document.getElementById('callModal').classList.add('hidden');
+      document.getElementById('remoteVideo').classList.add('hidden');
+      document.getElementById('localVideoContainer').classList.add('hidden');
+      document.getElementById('audioCallCenter').classList.remove('hidden');
+    }
+
+    document.getElementById('btnEndCall').addEventListener('click', () => {
+      if (state.conn && state.conn.open) {
+        state.conn.send({ type: 'call_ended' });
+      }
+      closeCall();
+    });
+
+    // Mute & Camera Toggles
+    document.getElementById('btnToggleMute').addEventListener('click', () => {
+      if (!state.localStream) return;
+      state.isMuted = !state.isMuted;
+      state.localStream.getAudioTracks().forEach(t => t.enabled = !state.isMuted);
+      const icon = state.isMuted ? 'mic-off' : 'mic';
+      document.getElementById('btnToggleMute').innerHTML = `<i data-lucide="${icon}" class="w-6 h-6 ${state.isMuted ? 'text-rose-400' : 'text-slate-200'}"></i>`;
+      lucide.createIcons();
+    });
+
+    document.getElementById('btnToggleCam').addEventListener('click', () => {
+      if (!state.localStream) return;
+      state.isCamOff = !state.isCamOff;
+      state.localStream.getVideoTracks().forEach(t => t.enabled = !state.isCamOff);
+      const icon = state.isCamOff ? 'video-off' : 'video';
+      document.getElementById('btnToggleCam').innerHTML = `<i data-lucide="${icon}" class="w-6 h-6 ${state.isCamOff ? 'text-rose-400' : 'text-slate-200'}"></i>`;
+      lucide.createIcons();
+    });
+
+    /* =====================================================================
+       8. UI CONTROLS, MODALS & STATUS MANAGEMENT
+       ===================================================================== */
+    function updateStatus(isConnected, text) {
+      const badge = document.getElementById('connectionBadge');
+      const pill = document.getElementById('p2pPill');
+      const sub = document.getElementById('subStatus');
+      const banner = document.getElementById('unpairedBanner');
+      const btnAudio = document.getElementById('btnAudioCall');
+      const btnVideo = document.getElementById('btnVideoCall');
+
+      if (isConnected) {
+        badge.className = 'absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 border-2 border-dark-950 animate-pulse';
+        pill.className = 'text-[10px] px-2 py-0.5 rounded-full font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-500/30';
+        pill.innerText = 'Connected';
+        banner.classList.add('hidden');
+        btnAudio.disabled = false;
+        btnVideo.disabled = false;
+      } else {
+        badge.className = 'absolute bottom-0 right-0 w-3 h-3 rounded-full bg-rose-500 border-2 border-dark-950';
+        pill.className = 'text-[10px] px-2 py-0.5 rounded-full font-mono bg-dark-800 text-slate-400 border border-white/5';
+        pill.innerText = 'Offline';
+        banner.classList.remove('hidden');
+        btnAudio.disabled = true;
+        btnVideo.disabled = true;
+      }
+      sub.innerHTML = `<span>${text}</span>`;
+    }
+
+    // Lightbox for photos
+    window.openLightbox = (src) => {
+      document.getElementById('lightboxImg').src = src;
+      document.getElementById('imageLightbox').classList.remove('hidden');
+    };
+    document.getElementById('imageLightbox').addEventListener('click', () => {
+      document.getElementById('imageLightbox').classList.add('hidden');
+    });
+
+    // Pair Modal Handlers
+    const pairModal = document.getElementById('pairModal');
+    document.getElementById('btnRoomInfo').addEventListener('click', () => pairModal.classList.remove('hidden'));
+    document.getElementById('btnOpenPairModal').addEventListener('click', () => pairModal.classList.remove('hidden'));
+
+    document.getElementById('btnGenRandomCode').addEventListener('click', () => {
+      const adjectives = ['silent', 'crystal', 'quantum', 'covert', 'lunar', 'emerald', 'velvet'];
+      const nouns = ['vault', 'whisper', 'cipher', 'falcon', 'nebula', 'phantom', 'shield'];
+      const num = Math.floor(100 + Math.random() * 900);
+      const randomCode = `${adjectives[Math.floor(Math.random() * adjectives.length)]}-${nouns[Math.floor(Math.random() * nouns.length)]}-${num}`;
+      document.getElementById('secretCodeInput').value = randomCode;
+    });
+
+    document.getElementById('pairForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const code = document.getElementById('secretCodeInput').value.trim();
+      const nick = document.getElementById('nickInput').value.trim() || 'User';
+      if (!code) return;
+
+      pairModal.classList.add('hidden');
+      initP2P(code, nick);
+    });
+
+    // Settings Modal Handlers
+    const settingsModal = document.getElementById('settingsModal');
+    document.getElementById('btnSettings').addEventListener('click', () => settingsModal.classList.remove('hidden'));
+    document.getElementById('btnCloseSettings').addEventListener('click', () => settingsModal.classList.add('hidden'));
+
+    // Export Chat History (JSON File Download)
+    document.getElementById('btnExportChat').addEventListener('click', async () => {
+      const messages = await db.messages.toArray();
+      const exportData = {
+        exportDate: new Date().toISOString(),
+        totalMessages: messages.length,
+        messages: messages
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ghostpair-chat-backup-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // Wipe Device Storage (IndexedDB + LocalStorage)
+    document.getElementById('btnWipeDevice').addEventListener('click', async () => {
+      if (confirm('Are you sure you want to completely erase all chat history and media from this device? This cannot be undone.')) {
+        await db.messages.clear();
+        localStorage.clear();
+        document.getElementById('messageStream').innerHTML = '';
+        updateMessageCount();
+        alert('All local device data has been purged successfully.');
+        location.reload();
+      }
+    });
+
+    /* =====================================================================
+       9. INITIAL BOOTSTRAP
+       ===================================================================== */
+    window.addEventListener('DOMContentLoaded', async () => {
+      await loadStoredMessages();
+
+      if (state.secretCode) {
+        document.getElementById('secretCodeInput').value = state.secretCode;
+        document.getElementById('nickInput').value = state.nickname;
+        pairModal.classList.add('hidden');
+        initP2P(state.secretCode, state.nickname);
+      } else {
+        pairModal.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>
